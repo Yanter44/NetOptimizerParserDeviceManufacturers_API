@@ -1,6 +1,0 @@
-2026/02/14-14:37:32.644 7fec Reusing MANIFEST C:\Users\Александр\source\repos\NetOptimizerParserApi\NetOptimizerParserApi\BrowserData\Default\IndexedDB\https_www.ozon.ru_0.indexeddb.leveldb/MANIFEST-000001
-2026/02/14-14:37:32.644 7fec Recovering log #3
-2026/02/14-14:37:32.654 7fec Reusing old log C:\Users\Александр\source\repos\NetOptimizerParserApi\NetOptimizerParserApi\BrowserData\Default\IndexedDB\https_www.ozon.ru_0.indexeddb.leveldb/000003.log 
-2026/02/14-14:43:43.387 4618 Level-0 table #5: started
-2026/02/14-14:43:43.407 4618 Level-0 table #5: 839217 bytes OK
-2026/02/14-14:43:43.411 4618 Delete type=0 #3
