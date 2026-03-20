@@ -1,0 +1,13 @@
+bin/
+obj/
+
+.vs/
+*.user
+*.suo
+
+.idea/
+
+*.nupkg
+packages/
+
+*.log
