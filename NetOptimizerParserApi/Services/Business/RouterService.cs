@@ -2,22 +2,23 @@
 using Microsoft.EntityFrameworkCore;
 using NetOptimizerParserApi.Common;
 using NetOptimizerParserApi.DbContext;
-using NetOptimizerParserApi.Enums;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
 using NetOptimizerParserApi.Models.DbEntities;
+using NetOptimizerParserApi.Models.DeviceDetails;
 using NetOptimizerParserApi.Models.Dto_s;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Services.Business
 {
     public class RouterService : IRouterService, IDeviceSaveStrategy
     {
-        private readonly AppDbContext dbcontext;
+        private readonly AppDbContext _dbContext;
         public ParseDevice DeviceType => ParseDevice.Routers;
 
         public RouterService(AppDbContext context)
         {
-            dbcontext = context;
+            _dbContext = context;
         }
 
         public async Task<ServiceResponse<bool>> ProcessAndSaveAsync(List<ProductsModel> products, SitesToParse site)
@@ -75,7 +76,7 @@ namespace NetOptimizerParserApi.Services.Business
             }
             try
             {
-                var existingNames = await dbcontext.RoutersTable
+                var existingNames = await _dbContext.RoutersTable
                     .Select(r => new { r.Vendor, r.Model })
                     .ToListAsync();
 
@@ -91,6 +92,7 @@ namespace NetOptimizerParserApi.Services.Business
                     {
                         newRouters.Add(new RouterEntity
                         {
+                            ExternalId = Guid.NewGuid(),    
                             Model = model.Model,
                             Vendor = model.Vendor,
                             AvveragePrice = model.AveragePrice,
@@ -106,8 +108,8 @@ namespace NetOptimizerParserApi.Services.Business
 
                 if (newRouters.Any())
                 {
-                    await dbcontext.RoutersTable.AddRangeAsync(newRouters);
-                    await dbcontext.SaveChangesAsync();
+                    await _dbContext.RoutersTable.AddRangeAsync(newRouters);
+                    await _dbContext.SaveChangesAsync();
 
                     response.Data = true;
                     response.Success = true;
@@ -140,13 +142,14 @@ namespace NetOptimizerParserApi.Services.Business
             
             try
             {
-                var existRouter = await dbcontext.RoutersTable
+                var existRouter = await _dbContext.RoutersTable
                     .FirstOrDefaultAsync(x => x.Model == model.Model && x.Vendor == model.Vendor);
 
                 if (existRouter == null)
                 {
                     var entity = new RouterEntity
                     {
+                        ExternalId = Guid.NewGuid(),
                         Model = model.Model,
                         Vendor = model.Vendor,
                         AvveragePrice = model.AveragePrice,
@@ -158,8 +161,8 @@ namespace NetOptimizerParserApi.Services.Business
                         UpdatedAt = DateTime.UtcNow
                     };
 
-                    await dbcontext.RoutersTable.AddAsync(entity); 
-                    await dbcontext.SaveChangesAsync();
+                    await _dbContext.RoutersTable.AddAsync(entity); 
+                    await _dbContext.SaveChangesAsync();
 
                     response.Data = true;
                     response.Success = true;
@@ -184,10 +187,11 @@ namespace NetOptimizerParserApi.Services.Business
         {
             try
             {
-                var result = await dbcontext.RoutersTable
+                var result = await _dbContext.RoutersTable
                     .AsNoTracking()
                     .Select(model => new RouterResponceDto
                     {
+                        ExternalId = model.ExternalId,
                         IsManaged = model.IsManaged,
                         Vendor = model.Vendor,
                         TotalPorts = model.Ports.Select(x => x.Count).Sum(),
@@ -215,12 +219,101 @@ namespace NetOptimizerParserApi.Services.Business
             }
           
         }
-
         public async Task<ServiceResponse<List<RouterResponceDto>>> GetRoutersByPriceRange(PriceRangeRequestDto priceRangeModel)
         {
-            throw new NotImplementedException();
+            try
+            {
+                var entities = await _dbContext.RoutersTable
+                    .Where(x => x.AvveragePrice >= priceRangeModel.Min && x.AvveragePrice <= priceRangeModel.Max)
+                    .ToListAsync();
+
+                var result = entities.Select(model => new RouterResponceDto
+                {
+                    ExternalId = model.ExternalId,
+                    Model = model.Model,
+                    Vendor = model.Vendor,
+                    Ports = model.Ports,
+                    AveragePrice = model.AvveragePrice,
+                    IsManaged = model.IsManaged,
+                    Performance = model.PerformanceSpecs,
+                    ProtocolSupport = model.ProtocolSupport,
+                    WifiOptions = model.WifiOptions
+                }).ToList();
+
+                return new ServiceResponse<List<RouterResponceDto>>
+                {
+                    Data = result,
+                    Success = true,
+                    Message = $"Найдено устройств: {result.Count}"
+                };
+            }
+            catch (Exception)
+            {
+                return new ServiceResponse<List<RouterResponceDto>>
+                {
+                    Success = false,
+                    Message = "Ошибка при фильтрации по цене."
+                };
+            }
         }
 
-   
+        public async Task<ServiceResponse<bool>> RemoveRouterFromDbAsync(string ExternalId)
+        {
+            var GuidFromString = Guid.Parse(ExternalId);
+            var existmodel = await _dbContext.RoutersTable.Where(x => x.ExternalId == GuidFromString).FirstOrDefaultAsync();
+            if (existmodel != null)
+            {
+                _dbContext.Remove(existmodel);
+                await _dbContext.SaveChangesAsync();
+                return new ServiceResponse<bool> { Success = true, Message = "Модель была найдена и успешно удалена" };
+            }
+            return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+        }
+
+        public async Task<ServiceResponse<bool>> RemoveRoutersFromDbAsync(List<string> ExternalIds)
+        {
+            var guids = ExternalIds.Select(Guid.Parse).ToList();
+
+            var existModels = await _dbContext.RoutersTable
+                .Where(x => guids.Contains(x.ExternalId))
+                .ToListAsync();
+
+            if (!existModels.Any())
+                return new ServiceResponse<bool> { Data = false, Message = "Не найдено ни одной модели" };
+
+            _dbContext.RoutersTable.RemoveRange(existModels);
+            await _dbContext.SaveChangesAsync();
+
+            return new ServiceResponse<bool> { Data = true, Message = "Успешно удалено" };
+        }
+
+        public async Task<ServiceResponse<bool>> UpdateRouterAsync(string routerExternalId, RouterModelRequestDto routerModelDto)
+        {
+            var parsedToGuidExternalId = Guid.Parse(routerExternalId);
+            var existModel = await _dbContext.RoutersTable
+                .FirstOrDefaultAsync(x => x.ExternalId == parsedToGuidExternalId);
+
+            if (existModel == null)
+                return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+
+            var dtoProperties = typeof(RouterModelRequestDto).GetProperties();
+            var modelType = typeof(RouterEntity);
+
+            foreach (var dtoProp in dtoProperties)
+            {
+                var value = dtoProp.GetValue(routerModelDto);
+                if (value != null)
+                {
+                    var modelProp = modelType.GetProperty(dtoProp.Name);
+
+                    if (modelProp != null && modelProp.CanWrite)
+                    {
+                        modelProp.SetValue(existModel, value);
+                    }
+                }
+            }
+            await _dbContext.SaveChangesAsync();
+            return new ServiceResponse<bool> { Success = true, Data = true };
+        }
     }
 }

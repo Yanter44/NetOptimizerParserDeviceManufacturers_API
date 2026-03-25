@@ -1,4 +1,5 @@
 ﻿using NetOptimizerParserApi.Common;
+using NetOptimizerParserApi.Models;
 using NetOptimizerParserApi.Models.Dto_s;
 
 namespace NetOptimizerParserApi.Interfaces
@@ -8,9 +9,9 @@ namespace NetOptimizerParserApi.Interfaces
 
         public Task<ServiceResponse<bool>> AddPcToDatabase(PcModelRequestDto model);
         public Task<ServiceResponse<bool>> AddPcsToDatabase(List<PcModelRequestDto> listOfModel);
-        public Task<ServiceResponse<bool>> RemovePcFromDatabase(int pcId);
-        public Task<ServiceResponse<bool>> UpdatePcInDatabase(int pcId,PcModelRequestDto model);
-        public Task<ServiceResponse<PcResponceDto>> GetPcFromDatabase(int pcId);
+        Task<ServiceResponse<bool>> RemovePcFromDbAsync(string ExternalId);
+        Task<ServiceResponse<bool>> RemovePcsFromDbAsync(List<string> ExternalIds);
+        Task<ServiceResponse<bool>> UpdatePcAsync(string pcExternalId, PcModelRequestDto PcModelRequestDto);
         public Task<ServiceResponse<List<PcResponceDto>>> GetAllPcsFromDatabaseAsync();
         public Task<ServiceResponse<List<PcResponceDto>>> GetPcsByPriceRange(PriceRangeRequestDto priceRange);
 

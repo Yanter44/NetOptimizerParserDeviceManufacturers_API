@@ -1,6 +1,7 @@
 ﻿using NetOptimizerParserApi.Interfaces;
+using NetOptimizerParserApi.Models.Components;
 
-namespace NetOptimizerParserApi.Models
+namespace NetOptimizerParserApi.Models.DeviceDetails
 {
     public class PcProductDetailsModel : ISpecificationProvider
     {

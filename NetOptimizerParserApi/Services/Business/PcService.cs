@@ -2,11 +2,12 @@
 using Microsoft.EntityFrameworkCore;
 using NetOptimizerParserApi.Common;
 using NetOptimizerParserApi.DbContext;
-using NetOptimizerParserApi.Enums;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
 using NetOptimizerParserApi.Models.DbEntities;
+using NetOptimizerParserApi.Models.DeviceDetails;
 using NetOptimizerParserApi.Models.Dto_s;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Services.Business
 {
@@ -29,14 +30,15 @@ namespace NetOptimizerParserApi.Services.Business
                 if (product.DeviceDetails is PcProductDetailsModel pcDetails)
                 {
                     var entityDto = new PcModelRequestDto
-                    {
+                    {                      
                         Model = product.ProductModel,
                         AveragePrice = product.AveragePrice,
                         Vendor = site.ToString(),
                         Ports = pcDetails.Ports,
                         TotalPorts = pcDetails.Ports.Sum(x => x.Count), 
-                        WifiOptions = pcDetails.WifiOptions,
+                        WifiOptions = pcDetails.WifiOptions, 
                         HardwareSpecs = pcDetails.HardwareSpecs
+                        
                     };
                     parsedPcsDevices.Add(entityDto);
                 }
@@ -73,6 +75,7 @@ namespace NetOptimizerParserApi.Services.Business
                 {
                     var pcRequestModelToEntityModel = new PcEntity()
                     {
+                        ExternalId = Guid.NewGuid(),
                         Model = model.Model,
                         Vendor = model.Vendor,
                         Ports = model.Ports,
@@ -117,6 +120,7 @@ namespace NetOptimizerParserApi.Services.Business
                     {
                         var pcRequestModelToEntityModel = new PcEntity()
                         {
+                            ExternalId = Guid.NewGuid(),
                             Model = model.Model,
                             Vendor = model.Vendor,
                             Ports = model.Ports,
@@ -141,28 +145,13 @@ namespace NetOptimizerParserApi.Services.Business
                 return new ServiceResponse<bool> { Success = false, Message = $"Ошибка: {ex.Message}" };
             }
         }
-
-        public Task<ServiceResponse<bool>> RemovePcFromDatabase(int pcId)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<ServiceResponse<bool>> UpdatePcInDatabase(int pcId, PcModelRequestDto model)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<ServiceResponse<PcResponceDto>> GetPcFromDatabase(int pcId)
-        {
-            throw new NotImplementedException();
-        }
-
         public async Task<ServiceResponse<List<PcResponceDto>>> GetAllPcsFromDatabaseAsync()
         {
             try
             {
                 var pcs = await _dbContext.PcTable.AsNoTracking().Select(model => new PcResponceDto
                 {
+                    ExternalId = model.ExternalId,
                     Vendor = model.Vendor,
                     Model = model.Model,
                     AveragePrice = model.AveragePrice,
@@ -199,6 +188,7 @@ namespace NetOptimizerParserApi.Services.Business
 
                 var result = entities.Select(model => new PcResponceDto
                 {
+                    ExternalId = model.ExternalId,
                     Model = model.Model,
                     Vendor = model.Vendor,
                     Ports = model.Ports,
@@ -222,6 +212,65 @@ namespace NetOptimizerParserApi.Services.Business
                     Message = "Ошибка при фильтрации по цене."
                 };
             }
+        }
+
+        public async Task<ServiceResponse<bool>> RemovePcFromDbAsync(string ExternalId)
+        {
+            var GuidFromString = Guid.Parse(ExternalId);
+            var existmodel = await _dbContext.PcTable.Where(x => x.ExternalId == GuidFromString).FirstOrDefaultAsync();
+            if (existmodel != null)
+            {
+                _dbContext.Remove(existmodel);
+                await _dbContext.SaveChangesAsync();
+                return new ServiceResponse<bool> { Success = true, Message = "Модель была найдена и успешно удалена" };
+            }
+            return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+        }
+
+        public async Task<ServiceResponse<bool>> RemovePcsFromDbAsync(List<string> ExternalIds)
+        {
+            var guids = ExternalIds.Select(Guid.Parse).ToList();
+
+            var existModels = await _dbContext.PcTable
+                .Where(x => guids.Contains(x.ExternalId))
+                .ToListAsync();
+
+            if (!existModels.Any())
+                return new ServiceResponse<bool> { Data = false, Message = "Не найдено ни одной модели" };
+
+            _dbContext.PcTable.RemoveRange(existModels);
+            await _dbContext.SaveChangesAsync();
+
+            return new ServiceResponse<bool> { Data = true, Message = "Успешно удалено" };
+        }
+
+        public async Task<ServiceResponse<bool>> UpdatePcAsync(string pcExternalId, PcModelRequestDto PcModelDto)
+        {
+            var parsedToGuidExternalId = Guid.Parse(pcExternalId);
+            var existModel = await _dbContext.PcTable
+                .FirstOrDefaultAsync(x => x.ExternalId == parsedToGuidExternalId);
+
+            if (existModel == null)
+                return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+
+            var dtoProperties = typeof(PcModelRequestDto).GetProperties();
+            var modelType = typeof(PcEntity);
+
+            foreach (var dtoProp in dtoProperties)
+            {
+                var value = dtoProp.GetValue(PcModelDto);
+                if (value != null)
+                {
+                    var modelProp = modelType.GetProperty(dtoProp.Name);
+
+                    if (modelProp != null && modelProp.CanWrite)
+                    {
+                        modelProp.SetValue(existModel, value);
+                    }
+                }
+            }
+            await _dbContext.SaveChangesAsync();
+            return new ServiceResponse<bool> { Success = true, Data = true };
         }
     }
 }

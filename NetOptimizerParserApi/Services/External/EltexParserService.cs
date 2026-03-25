@@ -1,8 +1,11 @@
 ﻿using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.Playwright;
-using NetOptimizerParserApi.Enums;
+using NetOptimizerParserApi.Common;
+using NetOptimizerParserApi.Extensions;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
+using NetOptimizerParserApi.Models.DeviceDetails;
+using NetOptimizerParserApi.Models.Enums;
 using Newtonsoft.Json.Linq;
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -14,6 +17,7 @@ namespace NetOptimizerParserApi.Services.External
     {
         private readonly IGigaChatAiService _gigaChatAiService;
         private readonly IPromtService _promtService;
+
         public SitesToParse Site => SitesToParse.Eltex;
 
         public EltexParserService(IGigaChatAiService gigachatAiService, IPromtService promtService)
@@ -21,22 +25,26 @@ namespace NetOptimizerParserApi.Services.External
             _gigaChatAiService = gigachatAiService;
             _promtService = promtService;
         }
-        public Task<List<ProductsModel>> ParseAsync(string url, ParserOptions options, CancellationToken cancellationToken)
+
+        public Task<ServiceResponse<List<ProductsModel>>> ParseAsync(string url, ParserOptions options, CancellationToken cancellationToken)
         {
            var result = this.ExecuteAsync(url, options, cancellationToken);
            return result;
         }
-        protected override async Task<List<ProductsModel>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
-        {
-            switch (options.ParsedDevices)
-            {
-                case ParseDevice.Switches:
-                    return await ParseCommutators(page, cancellationToken);
 
-                case ParseDevice.Routers:
-                    return await ParseRouters(page, cancellationToken);
-            }
-            return null;
+        protected async override Task<ServiceResponse<List<ProductsModel>>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
+        {
+            List<ProductsModel> data = options.ParsedDevices switch
+            {
+                ParseDevice.Switches => await ParseCommutators(page, cancellationToken),
+                ParseDevice.Routers => await ParseRouters(page, cancellationToken),
+                _ => null
+            };
+
+            if (data == null)
+                return new ServiceResponse<List<ProductsModel>> { Success = false, Message = $"Тип устройства {options.ParsedDevices} не поддерживается для {Site}"};
+            
+            return new ServiceResponse<List<ProductsModel>> { Data = data, Success = true, Message = $"Успешно спаршено. Найдено: {data.Count} шт."};
         }
 
         public async Task<List<ProductsModel>> ParseRouters(IPage page, CancellationToken cancellationToken)
@@ -45,14 +53,12 @@ namespace NetOptimizerParserApi.Services.External
             await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
             // 1. Навигация (без изменений)
-            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown")
-                                   .GetByRole(AriaRole.Button, new() { Name = "Каталог" });
-            await catalogButton.ClickAsync();
-
+            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown").GetByRole(AriaRole.Button, new() { Name = "Каталог" });
             var chapterButton = page.GetByRole(AriaRole.Button, new() { Name = "Маршрутизаторы ESR", Exact = true });
-            await chapterButton.ClickAsync();
-
             var accessRoutersLink = page.GetByRole(AriaRole.Link, new() { Name = "Сервисные маршрутизаторы", Exact = true });
+
+            await catalogButton.ClickWithRetryAsync(chapterButton);
+            await chapterButton.ClickAsync();
             await accessRoutersLink.ClickAsync();
 
             var linkLocator = page.Locator("div.good.equipment__column a");
@@ -169,11 +175,11 @@ namespace NetOptimizerParserApi.Services.External
 
                 tcs = new TaskCompletionSource<bool>();
                 await linkElement.ClickAsync();
+                await tcs.Task;
                 await Task.WhenAny(tcs.Task, Task.Delay(8000));
                 await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
                 await allcards.First.WaitForAsync();
             }
-
             page.Response -= universalHandler;
             return parsedProducts;
         }
@@ -190,12 +196,11 @@ namespace NetOptimizerParserApi.Services.External
             // 1. Переход в каталог
             var catalogButton = page.Locator("li.menu__item.menu__item--dropdown")
                                     .GetByRole(AriaRole.Button, new() { Name = "Каталог" });
-            await catalogButton.ClickAsync();
 
             // 2. Переход в подкаталог "Коммутаторы доступа"
             var accessSwitchesLink = page.GetByRole(AriaRole.Link, new() { Name = "Коммутаторы доступа", Exact = true });
-            await accessSwitchesLink.WaitForAsync();
 
+            await catalogButton.ClickWithRetryAsync(accessSwitchesLink);
             await Task.WhenAll(
                 page.WaitForURLAsync(url => url.Contains("ethernet-kommutatory_dostupa")),
                 accessSwitchesLink.ClickAsync()
@@ -228,6 +233,7 @@ namespace NetOptimizerParserApi.Services.External
 
                             var itemName = data["name"]?.ToString() ?? "";
                             const string prefix = "Коммутатор доступа ";
+
                             if (itemName.StartsWith(prefix))
                             {
                                 itemName = itemName[prefix.Length..];
@@ -299,9 +305,7 @@ namespace NetOptimizerParserApi.Services.External
                     catch { tcs?.TrySetResult(false); }
                 }
             };
-
             page.Response += universalHandler;
-
             for (int i = 0; i < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -316,13 +320,11 @@ namespace NetOptimizerParserApi.Services.External
                 tcs = new TaskCompletionSource<bool>();
                 await linkElement.ClickAsync();
 
-                // Ждем ответа от API или таймаут
                 await Task.WhenAny(tcs.Task, Task.Delay(8000));
 
                 await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
                 await allcards.First.WaitForAsync();
             }
-
             page.Response -= universalHandler;
             return parsedProducts;
         }
@@ -356,7 +358,6 @@ namespace NetOptimizerParserApi.Services.External
             PortType type;
             string speedStr = null;
 
-            // --- Определяем тип порта ---
             if (lowerName.Contains("rs-232") || lowerName.Contains("консоль"))
             {
                 type = PortType.Console;
@@ -449,7 +450,6 @@ namespace NetOptimizerParserApi.Services.External
                         break;
                 }
             }
-
             return (throughput, macTableSize, maxVlans);
         }
 

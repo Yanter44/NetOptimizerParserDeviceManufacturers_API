@@ -1,5 +1,5 @@
 ﻿using NetOptimizerParserApi.Constants;
-using NetOptimizerParserApi.Enums;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Services.Utility
 {

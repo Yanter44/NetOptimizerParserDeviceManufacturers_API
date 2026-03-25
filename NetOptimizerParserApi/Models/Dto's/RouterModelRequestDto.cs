@@ -1,4 +1,6 @@
-﻿namespace NetOptimizerParserApi.Models.Dto_s
+﻿using NetOptimizerParserApi.Models.Components;
+
+namespace NetOptimizerParserApi.Models.Dto_s
 {
     public class RouterModelRequestDto : NetworkDeviceBase
     {

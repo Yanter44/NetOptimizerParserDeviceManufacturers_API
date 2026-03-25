@@ -1,4 +1,4 @@
-﻿namespace NetOptimizerParserApi.Enums
+﻿namespace NetOptimizerParserApi.Models.Enums
 {
     public enum SitesToParse
     {

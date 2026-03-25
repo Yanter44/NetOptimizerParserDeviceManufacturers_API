@@ -1,6 +1,6 @@
 ﻿using NetOptimizerParserApi.Common;
-using NetOptimizerParserApi.Enums;
 using NetOptimizerParserApi.Models;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Interfaces
 {

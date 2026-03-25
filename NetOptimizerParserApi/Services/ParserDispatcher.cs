@@ -1,5 +1,5 @@
-﻿using NetOptimizerParserApi.Enums;
-using NetOptimizerParserApi.Interfaces;
+﻿using NetOptimizerParserApi.Interfaces;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Services
 {

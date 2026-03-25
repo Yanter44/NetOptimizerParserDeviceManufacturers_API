@@ -1,11 +1,13 @@
-﻿using Microsoft.AspNetCore.Components.Routing;
-using Microsoft.Playwright;
-using NetOptimizerParserApi.Enums;
+﻿using Microsoft.Playwright;
+using NetOptimizerParserApi.Common;
+using NetOptimizerParserApi.Extensions;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
+using NetOptimizerParserApi.Models.Components;
+using NetOptimizerParserApi.Models.DeviceDetails;
+using NetOptimizerParserApi.Models.Enums;
 using NetOptimizerParserApi.Services.Utility;
 using Newtonsoft.Json.Linq;
-using System.Diagnostics.Metrics;
 using System.Text.RegularExpressions;
 
 namespace NetOptimizerParserApi.Services.External
@@ -21,19 +23,21 @@ namespace NetOptimizerParserApi.Services.External
             _gigaChatAiService = gigachatAiService;
             _promtService = promtService;
         }
-        public Task<List<ProductsModel>> ParseAsync(string url, ParserOptions options, CancellationToken cancellationToken)
+        public Task<ServiceResponse<List<ProductsModel>>> ParseAsync(string url, ParserOptions options, CancellationToken cancellationToken)
         {
             return this.ExecuteAsync(url, options, cancellationToken);
         }
-
-        protected async override Task<List<ProductsModel>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
+        protected async override Task<ServiceResponse<List<ProductsModel>>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
         {
-            if (options.ParsedDevices == ParseDevice.PС)
+            List<ProductsModel> data = options.ParsedDevices switch
             {
-                var pcModels = await ParsePcs(page, cancellationToken);
-                return pcModels;
-            }
-            return new List<ProductsModel>();
+                ParseDevice.PС => await ParsePcs(page, cancellationToken),
+                _ => null
+            };
+            if (data == null)
+                return new ServiceResponse<List<ProductsModel>> { Success = false, Message = $"Тип устройства {options.ParsedDevices} не поддерживается для {Site}" };
+
+            return new ServiceResponse<List<ProductsModel>> { Data = data, Success = true, Message = $"Успешно спаршено. Найдено: {data.Count} шт." };
         }
 
         public async Task<List<ProductsModel>> ParsePcs(IPage page, CancellationToken cancellationToken)
@@ -41,10 +45,13 @@ namespace NetOptimizerParserApi.Services.External
             var finalBuilds = new List<ProductsModel>();
             await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
-            // Навигация
-            await page.GetByRole(AriaRole.Button, new() { Name = "Каталог" }).First.ClickAsync();
-            await page.GetByRole(AriaRole.Button, new() { Name = "Клиентские устройства" }).First.HoverAsync();
-            await page.Locator("li").GetByRole(AriaRole.Link, new() { Name = "ПК" }).First.ClickAsync();
+            var catalogBtn = page.GetByRole(AriaRole.Button, new() { Name = "Каталог" }).First;
+            var clientDevices = page.GetByRole(AriaRole.Button, new() { Name = "Клиентские устройства" }).First;
+            var pcLink = page.Locator("li").GetByRole(AriaRole.Link, new() { Name = "ПК" }).First;
+
+            await catalogBtn.ClickWithRetryAsync(clientDevices);
+            await clientDevices.HoverAsync();
+            await pcLink.ClickAsync();
 
             var allCards = page.Locator(".catalog__item");
             await allCards.First.WaitForAsync();
@@ -61,18 +68,25 @@ namespace NetOptimizerParserApi.Services.External
                     {
                         var jsonText = await response.TextAsync();
                         var data = JObject.Parse(jsonText)["data"];
-                        if (data == null) return;
+                        if (data == null)
+                        {
+                            tcs?.TrySetResult(true);
+                            return;
+                        }
 
                         var itemName = data["name"]?.ToString().Replace("ПК «Гравитон» ", "") ?? "Unknown";
                         var tabs = data["tabs"];
-                        if (tabs == null) return;
+                        if (tabs == null)
+                        {
+                            tcs?.TrySetResult(true);
+                            return;
+                        }
 
-                        // Списки для комбинаций
                         var availableCpus = new List<string>();
                         var ramOptions = new List<(int Amount, string Type)>();
                         var storageOptions = new List<(int Amount, string Type)>();
                         var parsedPorts = new List<Port>();
-                        var wifiOptions = new PcWifiOptions();
+                        bool hasWiFiFromSite = false;
 
                         var review = tabs["review"];
                         var blocks = review?["firstBlocks"] as JArray;
@@ -139,24 +153,32 @@ namespace NetOptimizerParserApi.Services.External
                                     }
                                     else if (pName == "Беспроводное соединение")
                                     {
-                                        wifiOptions.HasWiFi = pText.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase);
+                                        hasWiFiFromSite = pText.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase);
                                     }
                                 }
                             }
                         }
-
                         var allBuilds = new List<ProductsModel>();
-
                         foreach (var cpu in availableCpus)
                         {
                             foreach (var ram in ramOptions)
                             {
                                 foreach (var storage in storageOptions)
                                 {
+
+                                    var currentWifiOptions = new PcWifiOptions
+                                    {
+                                        HasWiFi = hasWiFiFromSite
+                                    };
                                     var specs = new PcProductDetailsModel
                                     {
-                                        Ports = parsedPorts,
-                                        WifiOptions = wifiOptions,
+                                        Ports = parsedPorts.Select(p => new Port
+                                        {
+                                            Count = p.Count,
+                                            Speed = p.Speed,
+                                            Type = p.Type
+                                        }).ToList(),
+                                        WifiOptions = currentWifiOptions,
                                         HardwareSpecs = new PcHardwareSpecs
                                         {
                                             CpuModel = cpu,
@@ -164,45 +186,65 @@ namespace NetOptimizerParserApi.Services.External
                                             RamType = ram.Type,
                                             StorageType = storage.Type,
                                             StorageAmountGb = storage.Amount
+                                            
                                         }
                                     };
                                     var newBuild = new ProductsModel
                                     {
                                         ProductModel = itemName,
                                         DeviceType = DeviceType.PC,
-                                        DeviceDetails = specs 
+                                        DeviceDetails = specs
                                     };
 
                                     var pcPrice = await GetPriceByAi(newBuild);
-                                    newBuild.AveragePrice = pcPrice;
-                                    allBuilds.Add(newBuild);
+                                    if (pcPrice > 0)
+                                    {
+                                        newBuild.AveragePrice = pcPrice;
+                                        allBuilds.Add(newBuild);
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine($"[Skip] Не удалось получить цену для: {newBuild.ProductModel}. Пропускаем...");
+                                    }
                                 }
                             }
                         }
                         finalBuilds.AddRange(allBuilds);
-                        tcs?.TrySetResult(true);
+                        tcs?.TrySetResult(true); 
                     }
-                    catch { tcs?.TrySetResult(false); }
+                    catch (Exception ex)
+                    {
+                        tcs?.TrySetException(new Exception($"Фатальная ошибка парсинга JSON/AI: {ex.Message}"));
+                    }
                 }
             };
             page.Response += universalHandler;
-            for (int i = 0; i < count; i++)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var link = allCards.Nth(i).Locator("a").First;
-                currentProductCode = (await link.GetAttributeAsync("href")).Trim('/').Split('/').Last();
+                for (int i = 0; i < count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                tcs = new TaskCompletionSource<bool>();
-                await link.ClickAsync();
-                await Task.WhenAny(tcs.Task, Task.Delay(10000));
+                    var link = allCards.Nth(i).Locator("a").First;
+                    var href = await link.GetAttributeAsync("href");
+                    currentProductCode = href.Trim('/').Split('/').Last();
 
-                await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
-                await allCards.First.WaitForAsync();
+                    tcs = new TaskCompletionSource<bool>();
+
+                    await link.ClickAsync();
+                    await tcs.Task;
+                    await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    await allCards.First.WaitForAsync();
+                }
+            }
+            finally
+            {
+                page.Response -= universalHandler;
             }
 
-            page.Response -= universalHandler;
             return finalBuilds;
         }
+
         private async Task<decimal> GetPriceByAi<T>(T device) where T : ProductsModel
         {
             try
@@ -216,17 +258,22 @@ namespace NetOptimizerParserApi.Services.External
                 {
                     specsDict.Add("Конфигурация", "Стандартная");
                 }
+
                 var prompt = _promtService.GetPricePrompt(
-                    Site.ToString(), 
+                    Site.ToString(),
                     device.ProductModel,
                     specsDict
                 );
+
                 var priceRaw = await _gigaChatAiService.AskQuestionAndGetAnswer(prompt);
                 var cleanPrice = Regex.Replace(priceRaw, @"[^\d]", "");
                 return decimal.TryParse(cleanPrice, out var p) ? p : 0;
             }
-            catch { return 0; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AI Error] {ex.Message}");
+                return 0;
+            }
         }
     }
-
 }

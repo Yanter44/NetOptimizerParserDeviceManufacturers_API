@@ -1,6 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 
-namespace NetOptimizerParserApi.Models
+namespace NetOptimizerParserApi.Models.Components
 {
     [Owned]
     public class ProtocolSupport

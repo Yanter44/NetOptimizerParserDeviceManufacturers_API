@@ -1,6 +1,6 @@
 ﻿using NetOptimizerParserApi.Interfaces;
 
-namespace NetOptimizerParserApi.Models
+namespace NetOptimizerParserApi.Models.DeviceDetails
 {
     public class CommutatorProductDetailsModel : ISpecificationProvider
     {

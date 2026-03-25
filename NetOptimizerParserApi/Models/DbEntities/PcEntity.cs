@@ -1,8 +1,12 @@
-﻿namespace NetOptimizerParserApi.Models.DbEntities
+﻿using NetOptimizerParserApi.Models.Components;
+using System.ComponentModel.DataAnnotations;
+
+namespace NetOptimizerParserApi.Models.DbEntities
 {
     public class PcEntity
     {
         public int Id { get; set; }
+        public Guid ExternalId { get; set; }
         public string Vendor { get; set; }
         public string Model { get; set; }
         public List<Port> Ports { get; set; } = new();

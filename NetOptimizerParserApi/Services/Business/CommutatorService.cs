@@ -1,11 +1,12 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using NetOptimizerParserApi.Common;
 using NetOptimizerParserApi.DbContext;
-using NetOptimizerParserApi.Enums;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
 using NetOptimizerParserApi.Models.DbEntities;
+using NetOptimizerParserApi.Models.DeviceDetails;
 using NetOptimizerParserApi.Models.Dto_s;
+using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Services.Business
 {
@@ -69,6 +70,7 @@ namespace NetOptimizerParserApi.Services.Business
                     .AsNoTracking()
                     .Select(model => new CommutatorResponceDto
                     {
+                        ExternalId = model.ExternalId,
                         Layer = model.Layer,
                         Model = model.Model,
                         Vendor = model.Vendor,
@@ -104,9 +106,6 @@ namespace NetOptimizerParserApi.Services.Business
         {
             try
             {
-                if (model == null)
-                    return new ServiceResponse<bool> { Success = false, Message = "Модель пуста." };
-
                 var exists = await _dbContext.CommutatorsTable
                         .AnyAsync(c => c.Vendor == model.Vendor && c.Model == model.Model);
 
@@ -115,6 +114,7 @@ namespace NetOptimizerParserApi.Services.Business
 
                 var entity = new CommutatorEntity
                 {
+                    ExternalId = Guid.NewGuid(),
                     Layer = model.Layer,
                     Model = model.Model,
                     Vendor = model.Vendor,
@@ -140,9 +140,6 @@ namespace NetOptimizerParserApi.Services.Business
 
         public async Task<ServiceResponse<bool>> AddCommutatorsToDbAsync(List<CommutatorModelRequestDto> models)
         {
-            if (models == null || !models.Any())
-                return new ServiceResponse<bool> { Success = false, Message = "Список устройств пуст." };
-
             try
             {
                 var modelNames = models.Select(m => m.Model).ToList();
@@ -160,6 +157,7 @@ namespace NetOptimizerParserApi.Services.Business
                     {
                         entitiesToAdd.Add(new CommutatorEntity
                         {
+                            ExternalId = Guid.NewGuid(),
                             Layer = model.Layer,
                             Model = model.Model,
                             Vendor = model.Vendor,
@@ -235,6 +233,63 @@ namespace NetOptimizerParserApi.Services.Business
             }
         }
 
- 
+        public async Task<ServiceResponse<bool>> RemoveCommutatorFromDbAsync(string ExternalId)
+        {
+            var GuidFromString = Guid.Parse(ExternalId);
+            var existmodel = await _dbContext.CommutatorsTable.Where(x => x.ExternalId == GuidFromString).FirstOrDefaultAsync();
+            if(existmodel != null)
+            {
+                _dbContext.Remove(existmodel);
+                await _dbContext.SaveChangesAsync();
+                return new ServiceResponse<bool> { Success = true, Message = "Модель была найдена и успешно удалена" };
+            }
+            return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+        }
+
+        public async Task<ServiceResponse<bool>> RemoveCommutatorsFromDbAsync(List<string> ExternalIds)
+        {
+            var guids = ExternalIds.Select(Guid.Parse).ToList();
+
+            var existModels = await _dbContext.CommutatorsTable
+                .Where(x => guids.Contains(x.ExternalId))
+                .ToListAsync();
+
+            if (!existModels.Any())
+                return new ServiceResponse<bool> { Data = false, Message = "Ничего не найдено" };
+
+            _dbContext.CommutatorsTable.RemoveRange(existModels);
+            await _dbContext.SaveChangesAsync();
+
+            return new ServiceResponse<bool> { Data = true, Message = "Успешно удалено" };
+        }
+
+        public async Task<ServiceResponse<bool>> UpdateCommutatorAsync(string commutatorExternalId, CommutatorModelRequestDto commutatorModeldto)
+        {
+            var parsedToGuidExternalId = Guid.Parse(commutatorExternalId);
+            var existModel = await _dbContext.CommutatorsTable
+                .FirstOrDefaultAsync(x => x.ExternalId == parsedToGuidExternalId);
+
+            if (existModel == null)
+                return new ServiceResponse<bool> { Success = false, Message = "Не удалось найти модель по заданному Id" };
+
+            var dtoProperties = typeof(CommutatorModelRequestDto).GetProperties();
+            var modelType = typeof(CommutatorEntity);
+
+            foreach (var dtoProp in dtoProperties)
+            {
+                var value = dtoProp.GetValue(commutatorModeldto);
+                if (value != null)
+                {
+                    var modelProp = modelType.GetProperty(dtoProp.Name);
+
+                    if (modelProp != null && modelProp.CanWrite)
+                    {
+                        modelProp.SetValue(existModel, value);
+                    }
+                }
+            }
+            await _dbContext.SaveChangesAsync();
+            return new ServiceResponse<bool> { Success = true, Data = true };
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿using NetOptimizerParserApi.Enums;
+﻿using NetOptimizerParserApi.Models.Enums;
 
 namespace NetOptimizerParserApi.Models
 {
