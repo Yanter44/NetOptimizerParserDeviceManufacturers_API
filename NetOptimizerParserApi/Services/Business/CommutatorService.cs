@@ -13,7 +13,6 @@ namespace NetOptimizerParserApi.Services.Business
     public class CommutatorService : ICommutatorService, IDeviceSaveStrategy
     {
         private readonly AppDbContext _dbContext;
-
         public ParseDevice DeviceType => ParseDevice.Switches;
 
         public CommutatorService(AppDbContext dbContext)
@@ -34,12 +33,11 @@ namespace NetOptimizerParserApi.Services.Business
                         Vendor = site.ToString(),
                         Layer = switchDetails.Layer,
                         IsManaged = switchDetails.IsManaged,
-                        MacTableSize = switchDetails.MacTableSize,
-                        SupportsPoe = switchDetails.SupportsPoe,
+                        PoeSpecs = switchDetails.PoeSpecs,
                         Ports = switchDetails.Ports,
-                        MaxVlans = switchDetails.MaxVlans,
-                        PoeBudgetW = switchDetails.PoeBudgetW,
-                        ThroughputGbps = switchDetails.ThroughputGbps,
+                        SwitchRoleType = switchDetails.SwitchRoleType,
+                        PerformanceSpecs = switchDetails.PerformanceSpecs,
+                        ProtocolSupport = switchDetails.ProtocolSupport,
                         TotalPorts = switchDetails.Ports.Sum(x => x.Count)
                     };
                     parsedSwitchDevices.Add(entityDto);
@@ -73,15 +71,14 @@ namespace NetOptimizerParserApi.Services.Business
                         ExternalId = model.ExternalId,
                         Layer = model.Layer,
                         Model = model.Model,
-                        Vendor = model.Vendor,
-                        SupportsPoe = model.SupportsPoe,
-                        MacTableSize = model.MacTableSize,
+                        Vendor = model.Vendor,             
+                        PoeSpecs = model.PoeSpecs,
                         Ports = model.Ports,
                         IsManaged = model.IsManaged,
-                        MaxVlans = model.MaxVlans,
-                        PoeBudgetW = model.PoeBudgetW,
-                        ThroughputGbps = model.ThroughputGbps,
+                        PerformanceSpecs = model.PerformanceSpecs,
+                        SwitchRoleType = model.SwitchRoleType,  
                         AveragePrice = model.AveragePrice,
+                        ProtocolSupport = model.ProtocolSupport,
                         TotalPorts = model.Ports.Select(x => x.Count).Sum()
                     }).ToListAsync();
 
@@ -118,13 +115,12 @@ namespace NetOptimizerParserApi.Services.Business
                     Layer = model.Layer,
                     Model = model.Model,
                     Vendor = model.Vendor,
-                    SupportsPoe = model.SupportsPoe,
-                    MacTableSize = model.MacTableSize,
+                    PoeSpecs = model.PoeSpecs,
+                    SwitchRoleType = model.SwitchRoleType,
                     Ports = model.Ports,
                     IsManaged = model.IsManaged,
-                    MaxVlans = model.MaxVlans,
-                    PoeBudgetW = model.PoeBudgetW,
-                    ThroughputGbps = model.ThroughputGbps,
+                    PerformanceSpecs = model.PerformanceSpecs,   
+                    ProtocolSupport = model.ProtocolSupport,
                     AveragePrice = model.AveragePrice,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -161,13 +157,12 @@ namespace NetOptimizerParserApi.Services.Business
                             Layer = model.Layer,
                             Model = model.Model,
                             Vendor = model.Vendor,
-                            SupportsPoe = model.SupportsPoe,
-                            MacTableSize = model.MacTableSize,
+                            PoeSpecs = model.PoeSpecs,
                             Ports = model.Ports,
                             IsManaged = model.IsManaged,
-                            MaxVlans = model.MaxVlans,
-                            PoeBudgetW = model.PoeBudgetW,
-                            ThroughputGbps = model.ThroughputGbps,
+                            PerformanceSpecs = model.PerformanceSpecs,
+                            SwitchRoleType = model.SwitchRoleType,
+                            ProtocolSupport = model.ProtocolSupport,
                             AveragePrice = model.AveragePrice,
                             UpdatedAt = DateTime.UtcNow
                         });
@@ -206,13 +201,11 @@ namespace NetOptimizerParserApi.Services.Business
                     Layer = model.Layer,
                     Model = model.Model,
                     Vendor = model.Vendor,
-                    SupportsPoe = model.SupportsPoe,
-                    MacTableSize = model.MacTableSize,
+                    PoeSpecs = model.PoeSpecs,
                     Ports = model.Ports,
                     IsManaged = model.IsManaged,
-                    MaxVlans = model.MaxVlans,
-                    PoeBudgetW = model.PoeBudgetW,
-                    ThroughputGbps = model.ThroughputGbps,
+                    PerformanceSpecs = model.PerformanceSpecs,
+                    ProtocolSupport = model.ProtocolSupport,
                     AveragePrice = model.AveragePrice,
                 }).ToList();
 

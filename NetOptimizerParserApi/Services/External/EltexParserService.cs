@@ -1,15 +1,14 @@
-﻿using Microsoft.AspNetCore.Components.Routing;
-using Microsoft.Playwright;
+﻿using Microsoft.Playwright;
 using NetOptimizerParserApi.Common;
 using NetOptimizerParserApi.Extensions;
 using NetOptimizerParserApi.Interfaces;
 using NetOptimizerParserApi.Models;
+using NetOptimizerParserApi.Models.Components;
 using NetOptimizerParserApi.Models.DeviceDetails;
 using NetOptimizerParserApi.Models.Enums;
 using Newtonsoft.Json.Linq;
 using System.Globalization;
 using System.Text.RegularExpressions;
-
 
 namespace NetOptimizerParserApi.Services.External
 {
@@ -17,24 +16,28 @@ namespace NetOptimizerParserApi.Services.External
     {
         private readonly IGigaChatAiService _gigaChatAiService;
         private readonly IPromtService _promtService;
-
+        private readonly INetworkService _networkService;
+        private readonly IPdfReaderService _pdfReaderService;
         public SitesToParse Site => SitesToParse.Eltex;
-
-        public EltexParserService(IGigaChatAiService gigachatAiService, IPromtService promtService)
+        public EltexParserService(
+            IGigaChatAiService gigachatAiService, 
+            IPromtService promtService, 
+            INetworkService networkService, IPdfReaderService pdfreaderService)
         {
             _gigaChatAiService = gigachatAiService;
             _promtService = promtService;
+            _networkService = networkService;
+            _pdfReaderService = pdfreaderService;
         }
 
         public Task<ServiceResponse<List<ProductsModel>>> ParseAsync(string url, ParserOptions options, CancellationToken cancellationToken)
         {
-           var result = this.ExecuteAsync(url, options, cancellationToken);
-           return result;
+            return ExecuteAsync(url, options, cancellationToken);
         }
 
-        protected async override Task<ServiceResponse<List<ProductsModel>>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
+        protected override async Task<ServiceResponse<List<ProductsModel>>> ParsePageAsync(IPage page, ParserOptions options, CancellationToken cancellationToken)
         {
-            List<ProductsModel> data = options.ParsedDevices switch
+            var data = options.ParsedDevices switch
             {
                 ParseDevice.Switches => await ParseCommutators(page, cancellationToken),
                 ParseDevice.Routers => await ParseRouters(page, cancellationToken),
@@ -42,417 +45,464 @@ namespace NetOptimizerParserApi.Services.External
             };
 
             if (data == null)
-                return new ServiceResponse<List<ProductsModel>> { Success = false, Message = $"Тип устройства {options.ParsedDevices} не поддерживается для {Site}"};
-            
-            return new ServiceResponse<List<ProductsModel>> { Data = data, Success = true, Message = $"Успешно спаршено. Найдено: {data.Count} шт."};
+                return new ServiceResponse<List<ProductsModel>>
+                {
+                    Success = false,
+                    Message = $"Тип устройства {options.ParsedDevices} не поддерживается для {Site}"
+                };
+
+            return new ServiceResponse<List<ProductsModel>>
+            {
+                Data = data,
+                Success = true,
+                Message = $"Успешно спаршено. Найдено: {data.Count} шт."
+            };
         }
 
-        public async Task<List<ProductsModel>> ParseRouters(IPage page, CancellationToken cancellationToken)
-        {
-            var parsedProducts = new List<ProductsModel>(); 
-            await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        #region ROUTERS
 
-            // 1. Навигация (без изменений)
-            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown").GetByRole(AriaRole.Button, new() { Name = "Каталог" });
+        public async Task<List<ProductsModel>> ParseRouters(IPage page, CancellationToken ct)
+        {
+            await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+            await NavigateToRouters(page);
+
+            var cards = await GetCards(page);
+            var result = new List<ProductsModel>();
+
+            foreach (var card in cards)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var product = await ParseRouterCardAsync(page, card);
+
+                if (product != null)
+                    result.Add(product);
+
+                await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+            }
+
+            return result;
+        }
+
+        private async Task NavigateToRouters(IPage page)
+        {
+            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown")
+                .GetByRole(AriaRole.Button, new() { Name = "Каталог" });
+
             var chapterButton = page.GetByRole(AriaRole.Button, new() { Name = "Маршрутизаторы ESR", Exact = true });
             var accessRoutersLink = page.GetByRole(AriaRole.Link, new() { Name = "Сервисные маршрутизаторы", Exact = true });
 
             await catalogButton.ClickWithRetryAsync(chapterButton);
             await chapterButton.ClickAsync();
             await accessRoutersLink.ClickAsync();
-
-            var linkLocator = page.Locator("div.good.equipment__column a");
-            await linkLocator.First.WaitForAsync(new() { State = WaitForSelectorState.Visible });
-
-            var allcards = page.Locator("div.good.equipment__column");
-            int count = await allcards.CountAsync();
-
-            TaskCompletionSource<bool> tcs = null;
-            string currentProductCode = "";
-
-            EventHandler<IResponse> universalHandler = async (sender, response) =>
-            {
-                if (!string.IsNullOrEmpty(currentProductCode) &&
-                    response.Url.Contains($"/api/catalog/good/{currentProductCode}"))
-                {
-                    try
-                    {
-                        var jsonText = await response.TextAsync();
-                        var innerJson = JObject.Parse(jsonText);
-                        var data = innerJson["data"];
-
-                        if (data != null)
-                        {
-                            var routerDetails = new RouterProductDetailsModel { IsManaged = true };
-
-                            var itemName = data["name"]?.ToString() ?? "";
-                            const string prefix = "Сервисный маршрутизатор ";
-
-                            if (itemName.StartsWith(prefix))
-                            {
-                                itemName = itemName[prefix.Length..];
-                            }
-
-                            if (itemName.Contains("Виртуальный", StringComparison.OrdinalIgnoreCase))
-                            {
-                                tcs?.TrySetResult(true);
-                                return;
-                            }
-
-                            var product = new ProductsModel
-                            {
-                                ProductModel = itemName,
-                                DeviceType = DeviceType.Router,
-                                DeviceDetails = routerDetails 
-                            };
-
-                            var properties = data["properties"];
-                            if (properties != null)
-                            {
-                                foreach (var group in properties)
-                                {
-                                    string groupName = group["name"]?.ToString() ?? "";
-                                    var propData = group["data"];
-                                    if (propData == null) continue;
-
-                                    foreach (var p in propData)
-                                    {
-                                        string pName = p["name"]?.ToString()?.ToLower() ?? "";
-                                        string pVal = p["value"]?.ToString() ?? "";
-
-                                        if (groupName.Contains("Интерфейсы"))
-                                        {
-                                            var parsedPort = ParsePort(pName, pVal);
-                                            if (parsedPort != null) routerDetails.Ports.Add(parsedPort);
-                                        }
-                                        else if (groupName.Contains("Производительность"))
-                                        {
-                                            double val = ExtractNumber(pVal);
-                                            if (pName.Contains("firewall") && pName.Contains("1518b"))
-                                                routerDetails.Performance.RoutingThroughputGbps = val;
-                                        }
-                                        else if (groupName.Contains("Физические характеристики"))
-                                        {
-                                            if (pName == "ram") routerDetails.Performance.RamMb = (int)ExtractNumber(pVal) * 1024;
-                                            if (pName.Contains("flash")) routerDetails.Performance.FlashMb = (int)ExtractNumber(pVal) * 1024;
-                                        }
-                                    }
-                                }
-                            }
-
-                            var attributes = data["base_attributes"];
-                            if (attributes != null)
-                            {
-                                foreach (var attr in attributes)
-                                {
-                                    string val = attr["value"]?.ToString()?.ToUpper() ?? "";
-                                    if (val.Contains("OSPF")) routerDetails.ProtocolSupport.SupportsOspf = true;
-                                    if (val.Contains("VRRP")) routerDetails.ProtocolSupport.SupportsVrrp = true;
-                                    if (val.Contains("IPSEC")) routerDetails.ProtocolSupport.SupportsIpsec = true;
-                                    if (val.Contains("NAT") || val.Contains("FIREWALL")) routerDetails.ProtocolSupport.SupportsNat = true;
-                                }
-                            }
-                            product.AveragePrice = await GetPriceByAi(product);
-                            parsedProducts.Add(product);
-                        }
-                        tcs?.TrySetResult(true);
-                    }
-                    catch { tcs?.TrySetResult(false); }
-                }
-            };
-
-            page.Response += universalHandler;
-
-            for (int i = 0; i < count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                Console.WriteLine("Парсим карточку роутера " + i);
-                var currentCard = allcards.Nth(i);
-                var linkElement = currentCard.Locator("a").First;
-
-                string href = await linkElement.GetAttributeAsync("href");
-                currentProductCode = href.Trim('/').Split('/').Last();
-
-                tcs = new TaskCompletionSource<bool>();
-                await linkElement.ClickAsync();
-                await tcs.Task;
-                await Task.WhenAny(tcs.Task, Task.Delay(8000));
-                await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
-                await allcards.First.WaitForAsync();
-            }
-            page.Response -= universalHandler;
-            return parsedProducts;
-        }
-        double ExtractNumber(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input)) return 0;
-            var match = Regex.Match(input.Replace(',', '.'), @"[0-9]+(\.[0-9]+)?");
-            return match.Success ? double.Parse(match.Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
         }
 
-        public async Task<List<ProductsModel>> ParseCommutators(IPage page, CancellationToken cancellationToken)
+        private async Task<ProductsModel?> ParseRouterCardAsync(IPage page, ILocator card)
         {
-            var parsedProducts = new List<ProductsModel>();
-            // 1. Переход в каталог
-            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown")
-                                    .GetByRole(AriaRole.Button, new() { Name = "Каталог" });
+            var link = card.Locator("a").First;
 
-            // 2. Переход в подкаталог "Коммутаторы доступа"
-            var accessSwitchesLink = page.GetByRole(AriaRole.Link, new() { Name = "Коммутаторы доступа", Exact = true });
+            var href = await link.GetAttributeAsync("href");
+            var code = href.Trim('/').Split('/').Last();
 
-            await catalogButton.ClickWithRetryAsync(accessSwitchesLink);
-            await Task.WhenAll(
-                page.WaitForURLAsync(url => url.Contains("ethernet-kommutatory_dostupa")),
-                accessSwitchesLink.ClickAsync()
+            var response = await page.RunAndWaitForResponseAsync(
+                async () => await link.ClickAsync(),
+                r => r.Url.Contains($"/api/catalog/good/{code}")
             );
 
-            var linkLocator = page.Locator("div.good.equipment__column a");
-            await linkLocator.First.WaitForAsync(new() { State = WaitForSelectorState.Visible });
+            var json = JObject.Parse(await response.TextAsync());
 
-            var allcards = page.Locator("div.good.equipment__column");
-            int count = await allcards.CountAsync();
+            return await BuildRouter(json["data"]);
+        }
 
-            TaskCompletionSource<bool> tcs = null;
-            string currentProductCode = "";
+        private async Task<ProductsModel?> BuildRouter(JToken data)
+        {
+            if (data == null) return null;
 
-            EventHandler<IResponse> universalHandler = async (sender, response) =>
+            var name = NormalizeName(data["name"]?.ToString(), "Сервисный маршрутизатор ");
+
+            if (name.Contains("Виртуальный", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var details = new RouterProductDetailsModel { IsManaged = true };
+
+            ParseRouterProperties(details, data["properties"]);
+            ParseRouterAttributes(details, data["base_attributes"]);
+
+            var product = new ProductsModel
             {
-                if (!string.IsNullOrEmpty(currentProductCode) &&
-                    response.Url.Contains($"/api/catalog/good/{currentProductCode}"))
-                {
-                    try
-                    {
-                        var jsonText = await response.TextAsync();
-                        var innerJson = JObject.Parse(jsonText);
-                        var data = innerJson["data"];
-
-                        if (data != null)
-                        {
-                            var switchDetails = new CommutatorProductDetailsModel();
-                            switchDetails.IsManaged = true;
-
-                            var itemName = data["name"]?.ToString() ?? "";
-                            const string prefix = "Коммутатор доступа ";
-
-                            if (itemName.StartsWith(prefix))
-                            {
-                                itemName = itemName[prefix.Length..];
-                            }
-                            var product = new ProductsModel
-                            {
-                                ProductModel = itemName,
-                                DeviceType = DeviceType.Switch,
-                                DeviceDetails = switchDetails 
-                            };
-
-                            var properties = data["properties"];
-                            var attributes = data["attributes"];
-                            if (attributes != null)
-                            {
-                                foreach (var attribute in attributes)
-                                {
-                                    var attributeName = attribute["attribute_name"]?.ToString();
-                                    var attributeValue = attribute["text_value"]?.ToString();
-
-                                    if (attributeName != null && attributeName.Contains("Уровень коммутатора"))
-                                    {
-                                        var switchLayer = attributeValue.Split("L");
-                                        if (switchLayer.Length > 1 && int.TryParse(switchLayer[1], out int layer))
-                                        {
-                                            switchDetails.Layer = layer;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            if (properties != null)
-                            {
-                                foreach (var group in properties)
-                                {
-                                    string groupName = group["name"]?.ToString() ?? "";
-                                    var propData = group["data"];
-                                    if (propData == null) continue;
-
-                                    foreach (var p in propData)
-                                    {
-                                        string pName = p["name"]?.ToString()?.ToLower() ?? "";
-                                        string pVal = p["value"]?.ToString() ?? "";
-
-                                        if (groupName.Contains("Интерфейсы"))
-                                        {
-                                            var parsedPort = ParsePort(pName, pVal);
-                                            if (parsedPort != null)
-                                            {
-                                                switchDetails.Ports.Add(parsedPort);
-                                            }
-                                        }
-                                        if (groupName.Contains("Производительность"))
-                                        {
-                                            var (throughput, macSize, vlanCount) = ParsePerformanceProperties(propData);
-                                            switchDetails.ThroughputGbps = throughput;
-                                            switchDetails.MacTableSize = macSize;
-                                            switchDetails.MaxVlans = vlanCount;
-                                        }
-                                    }
-                                }
-
-                                product.AveragePrice = await GetPriceByAi(product);
-                                parsedProducts.Add(product);
-                            }
-                            tcs?.TrySetResult(true);
-                        }
-                    }
-                    catch { tcs?.TrySetResult(false); }
-                }
+                ProductModel = name,
+                DeviceType = DeviceType.Router,
+                DeviceDetails = details
             };
-            page.Response += universalHandler;
-            for (int i = 0; i < count; i++)
+
+            product.AveragePrice = await GetPriceByAi(product);
+
+            return product;
+        }
+
+        private void ParseRouterProperties(RouterProductDetailsModel d, JToken props)
+        {
+            if (props == null) return;
+
+            foreach (var group in props)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                Console.WriteLine("Парсим карточку " + i);
+                string groupName = group["name"]?.ToString() ?? "";
+                var data = group["data"];
+                if (data == null) continue;
 
-                var currentCard = allcards.Nth(i);
-                var linkElement = currentCard.Locator("a").First;
+                foreach (var p in data)
+                {
+                    string name = p["name"]?.ToString()?.ToLower() ?? "";
+                    string val = p["value"]?.ToString() ?? "";
 
-                string href = await linkElement.GetAttributeAsync("href");
-                currentProductCode = href.Trim('/').Split('/').Last();
+                    if (groupName.Contains("Интерфейсы"))
+                    {
+                        var port = ParsePort(name, val);
+                        if (port != null) d.Ports.Add(port);
+                    }
+                    else if (groupName.Contains("Производительность"))
+                    {
+                        if (name.Contains("firewall") && name.Contains("1518b"))
+                            d.Performance.RoutingThroughputGbps = ExtractNumber(val);
+                    }
+                    else if (groupName.Contains("Физические характеристики"))
+                    {
+                        if (name == "ram")
+                            d.Performance.RamMb = (int)ExtractNumber(val) * 1024;
 
-                tcs = new TaskCompletionSource<bool>();
-                await linkElement.ClickAsync();
+                        if (name.Contains("flash"))
+                            d.Performance.FlashMb = (int)ExtractNumber(val) * 1024;
+                    }
+                }
+            }
+        }
 
-                await Task.WhenAny(tcs.Task, Task.Delay(8000));
+        private void ParseRouterAttributes(RouterProductDetailsModel d, JToken attrs)
+        {
+            if (attrs == null) return;
+
+            foreach (var a in attrs)
+            {
+                var val = a["value"]?.ToString()?.ToUpper() ?? "";
+
+                if (val.Contains("OSPF")) d.ProtocolSupport.SupportsOspf = true;
+                if (val.Contains("VRRP")) d.ProtocolSupport.SupportsVrrp = true;
+                if (val.Contains("IPSEC")) d.ProtocolSupport.SupportsIpsec = true;
+                if (val.Contains("NAT") || val.Contains("FIREWALL"))
+                    d.ProtocolSupport.SupportsNat = true;
+            }
+        }
+
+        #endregion
+
+        #region SWITCHES
+        public async Task<List<ProductsModel>> ParseCommutators(IPage page, CancellationToken ct)
+        {
+            await NavigateToSwitches(page);
+
+            var cards = await GetCards(page);
+            var result = new List<ProductsModel>();
+
+            foreach (var card in cards)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var product = await ParseSwitchCardAsync(page, card);
+
+                if (product != null)
+                    result.Add(product);
 
                 await page.GoBackAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded });
-                await allcards.First.WaitForAsync();
             }
-            page.Response -= universalHandler;
-            return parsedProducts;
+            return result;
         }
+
+        private async Task NavigateToSwitches(IPage page)
+        {
+            var catalogButton = page.Locator("li.menu__item.menu__item--dropdown")
+                .GetByRole(AriaRole.Button, new() { Name = "Каталог" });
+
+            var link = page.GetByRole(AriaRole.Link, new() { Name = "Коммутаторы доступа", Exact = true });
+
+            await catalogButton.ClickWithRetryAsync(link);
+
+            await Task.WhenAll(
+                page.WaitForURLAsync(u => u.Contains("ethernet-kommutatory_dostupa")),
+                link.ClickAsync()
+            );
+        }
+
+        private async Task<ProductsModel?> ParseSwitchCardAsync(IPage page, ILocator card)
+        {
+            var link = card.Locator("a").First;
+
+            var href = await link.GetAttributeAsync("href");
+            var code = href.Trim('/').Split('/').Last();
+
+            var response = await page.RunAndWaitForResponseAsync(
+                async () => await link.ClickAsync(),
+                r => r.Url.Contains($"/api/catalog/good/{code}")
+            );
+
+            var json = JObject.Parse(await response.TextAsync());
+
+            var product = await BuildSwitch(json["data"]);
+
+            var datasheetUrl = await GetDatasheetUrl(page);
+            var resultBytes = await _networkService.DownloadFileAsync(datasheetUrl, default);
+            var pdfText =  _pdfReaderService.ExtractText(resultBytes);
+            SwitchProtocolSupport supportedProtocols = CheckSupportedSwitchProtocols(pdfText);
+            var switchProductDetails = product.DeviceDetails as CommutatorProductDetailsModel;
+            switchProductDetails.ProtocolSupport = supportedProtocols;
+            return product;
+        }
+        private SwitchProtocolSupport CheckSupportedSwitchProtocols(string text)
+        {
+            text = text.ToLowerInvariant();
+
+            var supportsLacp = text.Contains("объединение каналов с использованием lacp");
+            var supportsLag = text.Contains("создание групп lag") || supportsLacp;
+
+            var protocolSupportModel = new SwitchProtocolSupport
+            {
+                SupportsLag = supportsLag,
+                SupportsLacp = supportsLacp,
+                SupportsLoopProtection = text.Contains("поддержка stp"),
+            };
+            return protocolSupportModel;
+        }
+        private async Task<string?> GetDatasheetUrl(IPage page)
+        {
+            var link = page.Locator("a.column-body[href*='pdf']").First;
+
+            if (await link.CountAsync() == 0)
+                return null;
+
+            var href = await link.GetAttributeAsync("href");
+
+            return string.IsNullOrWhiteSpace(href) ? null : href;
+        }
+        private async Task<ProductsModel?> BuildSwitch(JToken data)
+        {
+            if (data == null) return null;
+
+            var name = NormalizeName(data["name"]?.ToString(), "Коммутатор доступа ");
+
+            var details = new CommutatorProductDetailsModel
+            {
+                IsManaged = true,
+                SwitchRoleType = SwitchRoleType.Access
+            };
+
+            ParseSwitchAttributes(details, data["attributes"]);
+            ParseSwitchProperties(details, data["properties"]);
+         
+            var product = new ProductsModel
+            {
+                ProductModel = name,
+                DeviceType = DeviceType.Switch,
+                DeviceDetails = details
+            };
+            product.AveragePrice = await GetPriceByAi(product);
+            return product;
+        }
+        private void ParseSwitchProtocolSupport()
+        {
+
+        }
+
+        private void ParseSwitchAttributes(CommutatorProductDetailsModel d, JToken attrs)
+        {
+            if (attrs == null) return;
+
+            foreach (var a in attrs)
+            {
+                var name = a["attribute_name"]?.ToString();
+                var val = a["text_value"]?.ToString();
+
+                if (name?.Contains("Уровень коммутатора") == true)
+                {
+                    var parts = val.Split("L");
+                    if (parts.Length > 1 && int.TryParse(parts[1], out int layer))
+                        d.Layer = layer;
+
+                    break;
+                }
+            }
+        }
+
+        private void ParseSwitchProperties(CommutatorProductDetailsModel d, JToken props)
+        {
+            if (props == null) return;
+
+            foreach (var group in props)
+            {
+                string groupName = group["name"]?.ToString() ?? "";
+                var data = group["data"];
+                if (data == null) continue;
+
+                if (groupName.Contains("Производительность"))
+                {
+                    var (t, mac, vlan) = ParsePerformanceProperties(data);
+                    d.PerformanceSpecs.ThroughputGbps = t;
+                    d.PerformanceSpecs.MacTableSize = mac;
+                    d.PerformanceSpecs.MaxVlans = vlan;
+                }
+
+                foreach (var p in data)
+                {
+                    string name = p["name"]?.ToString()?.ToLower() ?? "";
+                    string val = p["value"]?.ToString() ?? "";
+
+                    if (groupName.Contains("Интерфейсы"))
+                    {
+                        var port = ParsePort(name, val);
+                        if (port != null) d.Ports.Add(port);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
+        #region COMMON
+
+        private async Task<List<ILocator>> GetCards(IPage page)
+        {
+            var locator = page.Locator("div.good.equipment__column");
+
+            await locator.First.WaitForAsync();
+
+            int count = await locator.CountAsync();
+
+            var list = new List<ILocator>();
+
+            for (int i = 0; i < count; i++)
+                list.Add(locator.Nth(i));
+
+            return list;
+        }
+
+        private string NormalizeName(string name, string prefix)
+        {
+            if (string.IsNullOrEmpty(name)) return "";
+
+            return name.StartsWith(prefix)
+                ? name[prefix.Length..]
+                : name;
+        }
+
+        private double ExtractNumber(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return 0;
+
+            var match = Regex.Match(input.Replace(',', '.'), @"[0-9]+(\.[0-9]+)?");
+
+            return match.Success
+                ? double.Parse(match.Value, CultureInfo.InvariantCulture)
+                : 0;
+        }
+
         private async Task<decimal> GetPriceByAi<T>(T device) where T : ProductsModel
         {
             try
             {
-                Dictionary<string, string> specsDict = new();
-                if (device.DeviceDetails is ISpecificationProvider provider)
-                {
-                    specsDict = provider.GetSpecificationsForAi();
-                }
+                Dictionary<string, string> specs = new();
+
+                if (device.DeviceDetails is ISpecificationProvider p)
+                    specs = p.GetSpecificationsForAi();
+
                 var prompt = _promtService.GetPricePrompt(
                     Site.ToString(),
                     device.ProductModel,
-                    specsDict
+                    specs
                 );
-                var priceRaw = await _gigaChatAiService.AskQuestionAndGetAnswer(prompt);
-                var cleanedPrice = Regex.Replace(priceRaw, @"[^\d]", "");
-                return decimal.TryParse(cleanedPrice, out var p) ? p : 0;
-            }
-            catch { return 0; }
-        }
-        Port ParsePort(string portName, string portValue)
-        {
-            int count = 0;
-            int.TryParse(portValue, out count);
 
-            string lowerName = portName.ToLower();
+                var raw = await _gigaChatAiService.AskQuestionAndGetAnswer(prompt);
+
+                var cleaned = Regex.Replace(raw, @"[^\d]", "");
+
+                return decimal.TryParse(cleaned, out var price) ? price : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private Port ParsePort(string name, string value)
+        {
+            int.TryParse(value, out int count);
+
+            var lower = name.ToLower();
 
             PortType type;
-            string speedStr = null;
+            string speed = null;
 
-            if (lowerName.Contains("rs-232") || lowerName.Contains("консоль"))
+            if (lower.Contains("rs-232") || lower.Contains("консоль"))
             {
                 type = PortType.Console;
-                speedStr = "Console";
+                speed = "Console";
             }
-            else if (lowerName.Contains("sfp+"))
-            {
-                type = PortType.SFPPlus;
-            }
-            else if (lowerName.Contains("sfp") || lowerName.Contains("base-x"))
-            {
-                type = PortType.SFP;
-            }
-            else if (lowerName.Contains("qsfp"))
-            {
-                type = PortType.QSFP;
-            }
-            else if (lowerName.Contains("combo"))
-            {
-                type = PortType.Combo;
-            }
-            else if (lowerName.Contains("rj-45"))
-            {
-                type = PortType.RJ45;
-            }
-            else
-            {
-                return null;
-            }
+            else if (lower.Contains("sfp+")) type = PortType.SFPPlus;
+            else if (lower.Contains("sfp")) type = PortType.SFP;
+            else if (lower.Contains("qsfp")) type = PortType.QSFP;
+            else if (lower.Contains("combo")) type = PortType.Combo;
+            else if (lower.Contains("rj-45")) type = PortType.RJ45;
+            else return null;
 
-            // --- Скорость только для сетевых портов ---
-            if (type == PortType.RJ45 || type == PortType.SFP || type == PortType.SFPPlus || type == PortType.QSFP || type == PortType.Combo)
+            if (type != PortType.Console)
             {
-                var matches = Regex.Matches(lowerName, @"(\d+)([mg]?)base", RegexOptions.IgnoreCase);
-                int maxSpeed = 0;
-                speedStr = "Unknown";
+                var matches = Regex.Matches(lower, @"(\d+)([mg]?)base");
+                int max = 0;
 
                 foreach (Match m in matches)
                 {
                     int val = int.Parse(m.Groups[1].Value);
                     string unit = m.Groups[2].Value.ToUpper();
-                    int valInM = (unit == "G") ? val * 1000 : val;
+                    int valM = unit == "G" ? val * 1000 : val;
 
-                    if (valInM > maxSpeed) maxSpeed = valInM;
+                    if (valM > max) max = valM;
                 }
 
-                if (maxSpeed >= 1000)
-                    speedStr = (maxSpeed / 1000) + "G";
-                else if (maxSpeed > 0)
-                    speedStr = maxSpeed + "M";
+                speed = max >= 1000 ? (max / 1000) + "G" :
+                        max > 0 ? max + "M" : "Unknown";
             }
 
-            return new Port
-            {
-                Count = count,
-                Type = type,
-                Speed = speedStr
-            };
+            return new Port { Count = count, Type = type, Speed = speed };
         }
-        private (decimal ThroughputGbps, int MacTableSize, int MaxVlans) ParsePerformanceProperties(JToken propData)
+
+        private (decimal, int, int) ParsePerformanceProperties(JToken data)
         {
-            decimal throughput = 0;
-            int macTableSize = 0;
-            int maxVlans = 0;
+            decimal t = 0;
+            int mac = 0;
+            int vlan = 0;
 
-            foreach (var prop in propData)
+            foreach (var p in data)
             {
-                string propertyName = prop["name"]?.ToString() ?? "";
-                string propertyVal = prop["value"]?.ToString() ?? "";
+                string name = p["name"]?.ToString() ?? "";
+                string val = p["value"]?.ToString() ?? "";
 
-                switch (propertyName)
+                switch (name)
                 {
                     case "Пропускная способность":
-                        if (!string.IsNullOrWhiteSpace(propertyVal))
-                        {
-                            var clean = propertyVal.Replace("Гбит/с", "").Trim(); //похуй на эти мегабайты, таких коммутаторов нет блятЬ, а писать на русском - идите нахуй
-                            if (decimal.TryParse(clean, NumberStyles.Any, CultureInfo.GetCultureInfo("ru-RU"), out var val))
-                                throughput = val;
-                        }
+                        var clean = val.Replace("Гбит/с", "").Trim();
+                        decimal.TryParse(clean, NumberStyles.Any, CultureInfo.GetCultureInfo("ru-RU"), out t);
                         break;
 
                     case "Таблица MAC-адресов":
-                        if (int.TryParse(propertyVal.Replace(" ", ""), out int macSize))
-                            macTableSize = macSize;
+                        int.TryParse(val.Replace(" ", ""), out mac);
                         break;
 
                     case "Таблица VLAN":
-                        if (int.TryParse(propertyVal.Replace(" ", ""), out int vlanCount))
-                            maxVlans = vlanCount;
+                        int.TryParse(val.Replace(" ", ""), out vlan);
                         break;
                 }
             }
-            return (throughput, macTableSize, maxVlans);
+
+            return (t, mac, vlan);
         }
 
-      
+        #endregion
     }
 }

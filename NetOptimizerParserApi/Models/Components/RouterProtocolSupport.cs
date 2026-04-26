@@ -3,7 +3,7 @@
 namespace NetOptimizerParserApi.Models.Components
 {
     [Owned]
-    public class ProtocolSupport
+    public class RouterProtocolSupport
     {
         public bool SupportsOspf { get; set; }
         public bool SupportsVrrp { get; set; }

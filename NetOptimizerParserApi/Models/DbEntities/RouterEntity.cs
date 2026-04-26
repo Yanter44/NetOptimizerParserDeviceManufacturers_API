@@ -11,8 +11,8 @@ namespace NetOptimizerParserApi.Models.DbEntities
         public bool IsManaged { get; set; }
         public List<Port> Ports { get; set; } = new();
         public WifiOptions? WifiOptions { get; set; }
-        public PerformanceSpecs? PerformanceSpecs { get; set; }
-        public ProtocolSupport? ProtocolSupport { get; set; }
+        public RouterPerformanceSpecs? PerformanceSpecs { get; set; }
+        public RouterProtocolSupport? ProtocolSupport { get; set; }
         public decimal AvveragePrice { get; set; }
         public DateTime UpdatedAt { get; set; }
     }

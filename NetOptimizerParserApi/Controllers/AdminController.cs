@@ -12,7 +12,7 @@ namespace NetOptimizerParserApi.Controllers
         private readonly IPcService _pcservice;
         private readonly ICommutatorService _commutatorService;
         private readonly IRouterService _routerService;
-        public AdminController(IPcService pcService,ICommutatorService commutatorService, IRouterService routerService)
+        public AdminController(IPcService pcService, ICommutatorService commutatorService, IRouterService routerService)
         {
             _pcservice = pcService;
             _commutatorService = commutatorService;
@@ -32,7 +32,7 @@ namespace NetOptimizerParserApi.Controllers
 
         [HttpPatch("UpdateCommutator")]
         [Tags("Admin: Commutator")]
-        public async Task<IActionResult> UpdateCommutator(string commutatorExternalId, [FromBody ] CommutatorModelRequestDto modelDto)
+        public async Task<IActionResult> UpdateCommutator(string commutatorExternalId, [FromBody] CommutatorModelRequestDto modelDto)
         {
             var result = await _commutatorService.UpdateCommutatorAsync(commutatorExternalId, modelDto);
             if(result.Success)

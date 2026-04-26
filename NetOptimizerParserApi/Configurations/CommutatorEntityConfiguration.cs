@@ -5,9 +5,7 @@ using NetOptimizerParserApi.Models.DbEntities;
 namespace NetOptimizerParserApi.Configurations
 {
     public class CommutatorEntityConfiguration : IEntityTypeConfiguration<CommutatorEntity>
-
     {
-
         public void Configure(EntityTypeBuilder<CommutatorEntity> builder)
         {
 
@@ -26,6 +24,7 @@ namespace NetOptimizerParserApi.Configurations
 
             builder.Property(c => c.AveragePrice).HasPrecision(18, 2);
 
+            builder.Property(c => c.SwitchRoleType).HasConversion<string>();
         }
     }
 }

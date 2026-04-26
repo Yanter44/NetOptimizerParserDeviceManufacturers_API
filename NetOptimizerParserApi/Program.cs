@@ -14,7 +14,6 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 });
 
 builder.Services.AddSwaggerGen();
-builder.Services.AddHttpClient();
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(builder.Configuration["NetOptimizerDb:DefaultConnection"]));
 
 builder.Services.AddScoped<EltexParserService>();
@@ -26,6 +25,8 @@ builder.Services.AddScoped<IParserStrategy, EltexParserService>();
 builder.Services.AddScoped<IParserStrategy, GravitonParserService>();
 builder.Services.AddScoped<IGigaChatAiService, GigaChatAIService>();
 builder.Services.AddScoped<IPromtService, PromptGeneratorService>();
+builder.Services.AddHttpClient<INetworkService, NetworkService>();
+builder.Services.AddTransient<IPdfReaderService, PdfReaderService>();
 
 builder.Services.AddScoped<CommutatorService>();
 builder.Services.AddScoped<ICommutatorService>(sp => sp.GetRequiredService<CommutatorService>());

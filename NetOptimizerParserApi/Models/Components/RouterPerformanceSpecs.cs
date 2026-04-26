@@ -3,7 +3,7 @@
 namespace NetOptimizerParserApi.Models.Components
 {
     [Owned]
-    public class PerformanceSpecs
+    public class RouterPerformanceSpecs
     {
         public double RoutingThroughputGbps { get; set; }
         public int RamMb { get; set; }

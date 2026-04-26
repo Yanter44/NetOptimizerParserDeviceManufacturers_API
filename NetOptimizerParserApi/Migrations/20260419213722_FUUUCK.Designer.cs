@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetOptimizerParserApi.DbContext;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NetOptimizerParserApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260419213722_FUUUCK")]
+    partial class FUUUCK
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -48,9 +51,8 @@ namespace NetOptimizerParserApi.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
-                    b.Property<string>("SwitchRoleType")
-                        .IsRequired()
-                        .HasColumnType("text");
+                    b.Property<int>("SwitchRoleType")
+                        .HasColumnType("integer");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -182,6 +184,9 @@ namespace NetOptimizerParserApi.Migrations
                             b1.Property<int>("CommutatorEntityId")
                                 .HasColumnType("integer");
 
+                            b1.Property<int?>("QosQueuesPerPort")
+                                .HasColumnType("integer");
+
                             b1.Property<bool>("SupportsLacp")
                                 .HasColumnType("boolean");
 
@@ -189,6 +194,9 @@ namespace NetOptimizerParserApi.Migrations
                                 .HasColumnType("boolean");
 
                             b1.Property<bool>("SupportsLoopProtection")
+                                .HasColumnType("boolean");
+
+                            b1.Property<bool>("SupportsQos")
                                 .HasColumnType("boolean");
 
                             b1.HasKey("CommutatorEntityId");
